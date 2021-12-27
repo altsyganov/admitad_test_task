@@ -1,0 +1,109 @@
+version: "3"
+
+services:
+  backend:
+    build:
+      context: .
+    image: backend-image
+    container_name: backend
+    hostname: backend
+    restart: on-failure
+    expose:
+      - 8080
+    volumes:
+      - .:/pdf_generator
+      - static_volume:/app/static
+      - media_volume:/app/media
+
+    command: >
+      sh -c "python3 manage.py makemigrations &&
+             python3 manage.py migrate &&
+             gunicorn pdf_generator.wsgi:application --bind 0.0.0.0:8080"
+    stdin_open: true
+    tty: true
+    depends_on:
+      - db
+      - rabbit
+    networks:
+      - shared_network
+
+  rabbit:
+    image: rabbitmq:3-management
+    container_name: rabbit
+    hostname: rabbit
+    environment:
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=admin
+      - RABBITMQ_DEFAULT_VHOST=/
+    ports:
+      - "5682:5672"
+      - "15682:15672"
+    networks:
+      - shared_network
+
+  worker:
+    image: backend-image
+    restart: on-failure
+    container_name: celery_worker
+    command: >
+      sh -c "celery -A pdf_generator worker -l INFO
+             celery flower "
+    depends_on:
+      - backend
+      - rabbit
+      - db
+    networks:
+      - shared_network
+    volumes:
+      - media_volume:/app/media
+
+  db:
+    image: postgres:10-alpine
+    container_name: db
+    hostname: db
+    environment:
+      - POSTGRES_DB=app
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - "54320:5432"
+    networks:
+      - shared_network
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+
+  flower:
+    image: mher/flower
+    container_name: celery_flower
+    environment:
+      - CELERY_BROKER_URL=amqp://admin:admin@rabbit:5672//
+      - FLOWER_PORT=5555
+    ports:
+      - 5555:5555
+    depends_on:
+      - rabbit
+      - worker
+    networks:
+      - shared_network
+
+  nginx:
+    build: ./nginx
+    container_name: nginx
+    volumes:
+      - static_volume:/app/static
+      - media_volume:/app/media
+    ports:
+      - 1337:80
+    depends_on:
+      - backend
+    networks:
+      - shared_network
+
+networks:
+  shared_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  static_volume:
+  media_volume:
